@@ -9,6 +9,9 @@ app.registerExtension({
       copiedPath: "",
       selectedPath: "",
       selectedIsDir: false,
+      sortKey: "mtime",
+      sortDir: "desc",
+      entries: [],
       visible: false,
       hasPositioned: false,
     };
@@ -36,6 +39,11 @@ app.registerExtension({
         <button class="finder-btn" data-action="up">Up</button>
         <button class="finder-btn" data-action="refresh">Refresh</button>
         <div class="finder-path"></div>
+        <select class="finder-select finder-sort-key">
+          <option value="mtime">Date</option>
+          <option value="size">Size</option>
+        </select>
+        <button class="finder-btn" data-action="toggle-sort-dir">Desc</button>
       </div>
 
       <div class="finder-content">
@@ -146,12 +154,21 @@ app.registerExtension({
       }
       #comfyui-finder-panel .finder-nav {
         display: grid;
-        grid-template-columns: auto auto 1fr;
+        grid-template-columns: auto auto 1fr 90px 72px;
         gap: 8px;
         align-items: center;
         padding: 10px 12px;
         border-bottom: 1px solid var(--line);
         background: #101b2a;
+      }
+      #comfyui-finder-panel .finder-select {
+        border: 1px solid #365071;
+        background: #10233a;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 7px 8px;
+        font-size: 12px;
+        font-family: inherit;
       }
       #comfyui-finder-panel .finder-path {
         border: 1px solid #2f4360;
@@ -177,7 +194,7 @@ app.registerExtension({
       }
       #comfyui-finder-panel .finder-row {
         display: grid;
-        grid-template-columns: 1fr 120px;
+        grid-template-columns: 1fr 110px 150px;
         gap: 8px;
         align-items: center;
         padding: 8px 12px;
@@ -226,6 +243,11 @@ app.registerExtension({
       #comfyui-finder-panel .finder-row .size {
         text-align: right;
         color: #9ab0cf;
+      }
+      #comfyui-finder-panel .finder-row .date {
+        text-align: right;
+        color: #7e98bc;
+        font-size: 11px;
       }
       #comfyui-finder-panel .finder-log {
         margin: 0;
@@ -299,6 +321,13 @@ app.registerExtension({
           width: calc(100vw - 20px);
           height: 84vh;
         }
+        #comfyui-finder-panel .finder-nav {
+          grid-template-columns: auto auto 1fr;
+        }
+        #comfyui-finder-panel .finder-sort-key,
+        #comfyui-finder-panel [data-action="toggle-sort-dir"] {
+          grid-column: span 1;
+        }
         #comfyui-finder-panel .finder-content {
           grid-template-columns: 1fr;
         }
@@ -321,6 +350,7 @@ app.registerExtension({
     const logEl = panel.querySelector(".finder-log");
     const logDividerEl = panel.querySelector(".finder-log-divider");
     const uploadInput = panel.querySelector(".finder-upload");
+    const sortKeyEl = panel.querySelector(".finder-sort-key");
     const headEl = panel.querySelector(".finder-head");
     const resizerEl = panel.querySelector(".finder-resizer");
     const closeBtnEl = panel.querySelector(".finder-close");
@@ -355,6 +385,76 @@ app.registerExtension({
         unit += 1;
       }
       return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+    }
+
+    function formatDate(timestamp) {
+      if (!timestamp) return "-";
+      const date = new Date(timestamp * 1000);
+      const yy = date.getFullYear();
+      const mm = String(date.getMonth() + 1).padStart(2, "0");
+      const dd = String(date.getDate()).padStart(2, "0");
+      const hh = String(date.getHours()).padStart(2, "0");
+      const mi = String(date.getMinutes()).padStart(2, "0");
+      return `${yy}-${mm}-${dd} ${hh}:${mi}`;
+    }
+
+    function sortEntries(entries) {
+      const factor = state.sortDir === "asc" ? 1 : -1;
+      return [...entries].sort((a, b) => {
+        if (a.is_dir !== b.is_dir) return a.is_dir ? -1 : 1;
+        let av;
+        let bv;
+        if (state.sortKey === "size") {
+          av = a.is_dir ? -1 : (a.size ?? -1);
+          bv = b.is_dir ? -1 : (b.size ?? -1);
+        } else {
+          av = a.mtime ?? 0;
+          bv = b.mtime ?? 0;
+        }
+        if (av !== bv) return (av - bv) * factor;
+        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      });
+    }
+
+    function renderEntries(entries) {
+      const sortedEntries = sortEntries(entries);
+      listEl.innerHTML = "";
+      for (const entry of sortedEntries) {
+        const row = document.createElement("div");
+        row.className = "finder-row";
+        row.dataset.path = entry.relative_path;
+        row.dataset.isdir = entry.is_dir ? "1" : "0";
+        row.innerHTML = `
+          <div class="name">
+            <span class="finder-tag ${entry.is_dir ? "dir" : "file"}">${entry.is_dir ? "DIR" : "FILE"}</span>
+            <span class="finder-fname">${entry.name}</span>
+          </div>
+          <div class="size">${entry.is_dir ? "-" : formatSize(entry.size)}</div>
+          <div class="date">${formatDate(entry.mtime)}</div>
+        `;
+        row.addEventListener("click", () => {
+          state.selectedPath = entry.relative_path;
+          state.selectedIsDir = Boolean(entry.is_dir);
+          listEl.querySelectorAll(".finder-row").forEach((item) => item.classList.remove("active"));
+          row.classList.add("active");
+          renderPreview(entry);
+        });
+        row.addEventListener("dblclick", () => {
+          if (entry.is_dir) {
+            refreshList(entry.relative_path).catch((error) => setLog(error.message));
+            return;
+          }
+          if (isImageFile(entry.name)) {
+            loadImageToWorkflow(entry)
+              .then(() => refreshList(state.currentPath))
+              .catch((error) => setLog(error.message));
+          }
+        });
+        if (state.selectedPath === entry.relative_path) {
+          row.classList.add("active");
+        }
+        listEl.appendChild(row);
+      }
     }
 
     function isImageFile(name) {
@@ -604,42 +704,10 @@ app.registerExtension({
       state.currentPath = data.current_path || "";
       state.selectedPath = "";
       state.selectedIsDir = false;
+      state.entries = data.entries || [];
       pathEl.textContent = `ComfyUI root / ${state.currentPath || "."}`;
-      listEl.innerHTML = "";
       clearPreview();
-
-      for (const entry of data.entries) {
-        const row = document.createElement("div");
-        row.className = "finder-row";
-        row.dataset.path = entry.relative_path;
-        row.dataset.isdir = entry.is_dir ? "1" : "0";
-        row.innerHTML = `
-          <div class="name">
-            <span class="finder-tag ${entry.is_dir ? "dir" : "file"}">${entry.is_dir ? "DIR" : "FILE"}</span>
-            <span class="finder-fname">${entry.name}</span>
-          </div>
-          <div class="size">${entry.is_dir ? "-" : formatSize(entry.size)}</div>
-        `;
-        row.addEventListener("click", () => {
-          state.selectedPath = entry.relative_path;
-          state.selectedIsDir = Boolean(entry.is_dir);
-          listEl.querySelectorAll(".finder-row").forEach((item) => item.classList.remove("active"));
-          row.classList.add("active");
-          renderPreview(entry);
-        });
-        row.addEventListener("dblclick", () => {
-          if (entry.is_dir) {
-            refreshList(entry.relative_path).catch((error) => setLog(error.message));
-            return;
-          }
-          if (isImageFile(entry.name)) {
-            loadImageToWorkflow(entry)
-              .then(() => refreshList(state.currentPath))
-              .catch((error) => setLog(error.message));
-          }
-        });
-        listEl.appendChild(row);
-      }
+      renderEntries(state.entries);
     }
 
     function togglePanel(force) {
@@ -699,6 +767,12 @@ app.registerExtension({
     bindDragAndResize();
     bindLogResize();
     window.addEventListener("resize", () => clampPanelToViewport());
+    sortKeyEl.value = state.sortKey;
+
+    sortKeyEl.addEventListener("change", () => {
+      state.sortKey = sortKeyEl.value === "size" ? "size" : "mtime";
+      renderEntries(state.entries);
+    });
 
     panel.querySelectorAll(".finder-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
@@ -722,6 +796,10 @@ app.registerExtension({
             await deleteSelected();
           } else if (action === "download") {
             downloadSelected();
+          } else if (action === "toggle-sort-dir") {
+            state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+            btn.textContent = state.sortDir === "asc" ? "Asc" : "Desc";
+            renderEntries(state.entries);
           }
         } catch (error) {
           setLog(error.message);
