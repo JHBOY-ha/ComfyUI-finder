@@ -1,0 +1,2 @@
+# This plugin has no additional pip dependencies.
+# It relies on the standard ComfyUI runtime environment.

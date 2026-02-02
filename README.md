@@ -19,9 +19,21 @@ ComfyUI-finder 是一个 ComfyUI 悬浮式文件管理插件。
 
 ## 安装
 
-1. 将本目录放入 `ComfyUI/custom_nodes/ComfyUI-finder`
-2. 重启 ComfyUI
-3. 在 ComfyUI 页面按 `F` 打开/关闭 Finder
+### 方式一：在 `custom_nodes` 中使用 Git 克隆
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/JHBOY-ha/ComfyUI-finder.git
+```
+
+然后重启 ComfyUI  
+
+### 方式二：通过 ComfyUI Manager 安装
+
+1. 打开 **ComfyUI Manager**  
+2. 选择 **Install via Git URL**  
+3. 粘贴仓库地址：`https://github.com/JHBOY-ha/ComfyUI-finder.git`  
+4. 安装完成后重启 ComfyUI  
 
 ## 使用说明
 
