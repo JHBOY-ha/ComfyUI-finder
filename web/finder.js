@@ -8,6 +8,7 @@ app.registerExtension({
       currentPath: "",
       copiedPath: "",
       selectedPath: "",
+      selectedIsDir: false,
       visible: false,
       hasPositioned: false,
     };
@@ -28,6 +29,7 @@ app.registerExtension({
         <button class="finder-btn primary" data-action="paste">Paste</button>
         <button class="finder-btn danger" data-action="delete">Delete</button>
         <button class="finder-btn primary" data-action="upload">Upload</button>
+        <button class="finder-btn primary" data-action="download">Download</button>
       </div>
 
       <div class="finder-nav">
@@ -113,7 +115,7 @@ app.registerExtension({
       }
       #comfyui-finder-panel .finder-main-actions {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 8px;
         padding: 12px;
         border-bottom: 1px solid var(--line);
@@ -601,6 +603,7 @@ app.registerExtension({
       const data = await callJson(`/finder/list?${params.toString()}`);
       state.currentPath = data.current_path || "";
       state.selectedPath = "";
+      state.selectedIsDir = false;
       pathEl.textContent = `ComfyUI root / ${state.currentPath || "."}`;
       listEl.innerHTML = "";
       clearPreview();
@@ -619,6 +622,7 @@ app.registerExtension({
         `;
         row.addEventListener("click", () => {
           state.selectedPath = entry.relative_path;
+          state.selectedIsDir = Boolean(entry.is_dir);
           listEl.querySelectorAll(".finder-row").forEach((item) => item.classList.remove("active"));
           row.classList.add("active");
           renderPreview(entry);
@@ -677,6 +681,20 @@ app.registerExtension({
       await refreshList();
     }
 
+    function downloadSelected() {
+      if (!state.selectedPath) throw new Error("Select a file first");
+      if (state.selectedIsDir) throw new Error("Directory download is not supported");
+      const url = `/finder/file?path=${encodeURIComponent(state.selectedPath)}&download=1`;
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setLog(`Downloading: ${state.selectedPath}`);
+    }
+
     closeBtnEl.addEventListener("click", () => togglePanel(false));
     bindDragAndResize();
     bindLogResize();
@@ -702,6 +720,8 @@ app.registerExtension({
             await pasteCopied();
           } else if (action === "delete") {
             await deleteSelected();
+          } else if (action === "download") {
+            downloadSelected();
           }
         } catch (error) {
           setLog(error.message);

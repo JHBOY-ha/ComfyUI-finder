@@ -1,5 +1,6 @@
 import shutil
 from pathlib import Path
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -158,5 +159,10 @@ def register_routes() -> None:
         target = _resolve_path(path_rel, must_exist=True)
         if target.is_dir():
             raise web.HTTPBadRequest(text="Path is a directory")
+        if request.query.get("download") == "1":
+            filename = target.name
+            headers = {
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            }
+            return web.FileResponse(path=target, headers=headers)
         return web.FileResponse(path=target)
-
