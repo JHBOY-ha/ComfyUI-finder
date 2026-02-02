@@ -1,5 +1,3 @@
-import asyncio
-import shlex
 import shutil
 from pathlib import Path
 
@@ -70,27 +68,6 @@ def _list_entries(directory: Path) -> list[dict]:
     return entries
 
 
-async def _run_command(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        cwd=str(cwd),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1800)
-    except asyncio.TimeoutError:
-        process.kill()
-        await process.wait()
-        raise web.HTTPRequestTimeout(text="Command timed out (30m)")
-
-    return (
-        process.returncode,
-        stdout.decode("utf-8", errors="replace"),
-        stderr.decode("utf-8", errors="replace"),
-    )
-
-
 def register_routes() -> None:
     global _REGISTERED
     if _REGISTERED:
@@ -114,7 +91,7 @@ def register_routes() -> None:
     async def finder_upload(request: web.Request) -> web.Response:
         reader = await request.multipart()
         upload_dir = ""
-        upload_file = None
+        saved_to = None
 
         while True:
             field = await reader.next()
@@ -124,28 +101,24 @@ def register_routes() -> None:
             if field.name == "path":
                 upload_dir = (await field.text()).strip()
             elif field.name == "file":
-                upload_file = field
+                if not field.filename:
+                    continue
+                target_dir = _resolve_path(upload_dir, must_exist=True, must_be_dir=True)
+                filename = Path(field.filename).name
+                target_path = _next_available_path(target_dir / filename)
 
-        if upload_file is None or not upload_file.filename:
+                with target_path.open("wb") as handle:
+                    while True:
+                        chunk = await field.read_chunk(size=1024 * 1024)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                saved_to = _to_relative(target_path)
+
+        if saved_to is None:
             raise web.HTTPBadRequest(text="Missing file")
 
-        target_dir = _resolve_path(upload_dir, must_exist=True, must_be_dir=True)
-        filename = Path(upload_file.filename).name
-        target_path = _next_available_path(target_dir / filename)
-
-        with target_path.open("wb") as handle:
-            while True:
-                chunk = await upload_file.read_chunk(size=1024 * 1024)
-                if not chunk:
-                    break
-                handle.write(chunk)
-
-        return web.json_response(
-            {
-                "ok": True,
-                "saved_to": _to_relative(target_path),
-            }
-        )
+        return web.json_response({"ok": True, "saved_to": saved_to})
 
     @routes.post("/finder/copy")
     async def finder_copy(request: web.Request) -> web.Response:
@@ -162,58 +135,28 @@ def register_routes() -> None:
         else:
             shutil.copy2(source, destination)
 
-        return web.json_response(
-            {
-                "ok": True,
-                "new_path": _to_relative(destination),
-            }
-        )
+        return web.json_response({"ok": True, "new_path": _to_relative(destination)})
 
-    @routes.post("/finder/command")
-    async def finder_command(request: web.Request) -> web.Response:
+    @routes.post("/finder/delete")
+    async def finder_delete(request: web.Request) -> web.Response:
         data = await request.json()
-        command = data.get("command")
-        cwd = _resolve_path(data.get("cwd", ""), must_exist=True, must_be_dir=True)
-        cmd: list[str]
+        path_rel = data.get("path", "")
+        target = _resolve_path(path_rel, must_exist=True)
+        if target == ROOT_DIR:
+            raise web.HTTPBadRequest(text="Cannot delete ComfyUI root")
 
-        if command == "git_clone":
-            repo_url = (data.get("repo_url") or "").strip()
-            target_dir = (data.get("target_dir") or "").strip()
-            if not repo_url:
-                raise web.HTTPBadRequest(text="repo_url is required")
-            cmd = ["git", "clone", repo_url]
-            if target_dir:
-                cmd.append(target_dir)
-        elif command == "wget":
-            url = (data.get("url") or "").strip()
-            output_name = (data.get("output_name") or "").strip()
-            if not url:
-                raise web.HTTPBadRequest(text="url is required")
-            cmd = ["wget", url]
-            if output_name:
-                cmd.extend(["-O", output_name])
-        elif command == "hf_download":
-            repo_id = (data.get("repo_id") or "").strip()
-            file_name = (data.get("file_name") or "").strip()
-            local_dir = (data.get("local_dir") or "").strip()
-            if not repo_id:
-                raise web.HTTPBadRequest(text="repo_id is required")
-            cmd = ["hf", "download", repo_id]
-            if file_name:
-                cmd.append(file_name)
-            if local_dir:
-                cmd.extend(["--local-dir", local_dir])
+        if target.is_dir():
+            shutil.rmtree(target)
         else:
-            raise web.HTTPBadRequest(text="Unsupported command")
+            target.unlink()
 
-        return_code, stdout, stderr = await _run_command(cmd, cwd)
-        return web.json_response(
-            {
-                "ok": return_code == 0,
-                "return_code": return_code,
-                "command": shlex.join(cmd),
-                "stdout": stdout,
-                "stderr": stderr,
-            }
-        )
+        return web.json_response({"ok": True})
+
+    @routes.get("/finder/file")
+    async def finder_file(request: web.Request) -> web.StreamResponse:
+        path_rel = request.query.get("path", "")
+        target = _resolve_path(path_rel, must_exist=True)
+        if target.is_dir():
+            raise web.HTTPBadRequest(text="Path is a directory")
+        return web.FileResponse(path=target)
 
